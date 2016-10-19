@@ -142,10 +142,6 @@ public:
         pixelCenterInteger(false), originUpperLeft(false),
         vertexSpacing(EvsNone), vertexOrder(EvoNone), pointMode(false), earlyFragmentTests(false), depthLayout(EldNone), depthReplacing(false), blendEquations(0),
         multiStream(false), xfbMode(false),
-        shiftSamplerBinding(0),
-        shiftTextureBinding(0),
-        shiftUboBinding(0),
-        autoMapBindings(false),
         flattenUniformArrays(false)
     {
         localSize[0] = 1;
@@ -169,14 +165,6 @@ public:
     const std::string& getEntryPointName() const { return entryPointName; }
     const std::string& getEntryPointMangledName() const { return entryPointMangledName; }
 
-    void setShiftSamplerBinding(unsigned int shift) { shiftSamplerBinding = shift; }
-    unsigned int getShiftSamplerBinding() const { return shiftSamplerBinding; }
-    void setShiftTextureBinding(unsigned int shift) { shiftTextureBinding = shift; }
-    unsigned int getShiftTextureBinding() const { return shiftTextureBinding; }
-    void setShiftUboBinding(unsigned int shift)     { shiftUboBinding = shift; }
-    unsigned int getShiftUboBinding()     const { return shiftUboBinding; }
-    void setAutoMapBindings(bool map)               { autoMapBindings = map; }
-    bool getAutoMapBindings()             const { return autoMapBindings; }
     void setFlattenUniformArrays(bool flatten)      { flattenUniformArrays = flatten; }
     bool getFlattenUniformArrays()        const { return flattenUniformArrays; }
 
@@ -392,10 +380,6 @@ protected:
     EShSource source;            // source language, known a bit later
     std::string entryPointName;
     std::string entryPointMangledName;
-    unsigned int shiftSamplerBinding;
-    unsigned int shiftTextureBinding;
-    unsigned int shiftUboBinding;
-    bool autoMapBindings;
     bool flattenUniformArrays;
 
     EProfile profile;

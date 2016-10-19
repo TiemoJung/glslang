@@ -304,10 +304,6 @@ public:
         const char* const* s, const int* l, const char* const* names, int n);
     void setPreamble(const char* s) { preamble = s; }
     void setEntryPoint(const char* entryPoint);
-    void setShiftSamplerBinding(unsigned int base);
-    void setShiftTextureBinding(unsigned int base);
-    void setShiftUboBinding(unsigned int base);
-    void setAutoMapBindings(bool map);
     void setFlattenUniformArrays(bool flatten);
 
     // Interface to #include handlers.
@@ -444,7 +440,17 @@ private:
 class TReflection;
 class TIoMapper;
 
-// Make one TProgram per set of shaders that will get linked together.  Add all 
+class TIoMapResolver
+{
+public:
+  virtual ~TIoMapResolver() {}
+
+  virtual bool validateBinding(EShLanguage stage, const char* name, const TType& type, bool is_live) = 0;
+  virtual int resolveBinding(EShLanguage stage, const char* name, const TType& type, bool is_live) = 0;
+  virtual int resolveSet(EShLanguage stage, const char* name, const TType& type, bool is_live) = 0;
+};
+
+// Make one TProgram per set of shaders that will get linked together.  Add all
 // the shaders that are to be linked together.  After calling shader.parse()
 // for all shaders, call link().
 //
@@ -484,7 +490,15 @@ public:
     void dumpReflection();
 
     // I/O mapping: apply base offsets and map live unbound variables
-    bool mapIO();
+    // ordering in which the resolver is invoked:
+    // 1) var with binding and set already defined
+    // 2) var with binding but no set defined
+    // 3) var with set but no binding defined
+    // 4) var with no binding and no set defined
+    //
+    // If resolver is not provided it uses the prevous approach
+    // and respects auto assignment and offsets.
+    bool mapIO(TIoMapResolver* resolver = NULL);
 
 protected:
     bool linkStage(EShLanguage, EShMessages);

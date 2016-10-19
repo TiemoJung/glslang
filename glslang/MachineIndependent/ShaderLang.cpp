@@ -188,7 +188,7 @@ TPoolAllocator* PerProcessGPA = 0;
 //
 // Parse and add to the given symbol table the content of the given shader string.
 //
-bool InitializeSymbolTable(const TString& builtIns, int version, EProfile profile, const SpvVersion& spvVersion, EShLanguage language, TInfoSink& infoSink, 
+bool InitializeSymbolTable(const TString& builtIns, int version, EProfile profile, const SpvVersion& spvVersion, EShLanguage language, TInfoSink& infoSink,
                            TSymbolTable& symbolTable)
 {
     TIntermediate intermediate(language, version, profile);
@@ -1332,7 +1332,7 @@ int ShSetVirtualAttributeBindings(const ShHandle handle, const ShBindingTable* t
 
     if (linker == 0)
         return 0;
-   
+
     linker->setAppAttributeBindings(table);
 
     return 1;
@@ -1492,10 +1492,6 @@ void TShader::setEntryPoint(const char* entryPoint)
     intermediate->setEntryPointName(entryPoint);
 }
 
-void TShader::setShiftSamplerBinding(unsigned int base) { intermediate->setShiftSamplerBinding(base); }
-void TShader::setShiftTextureBinding(unsigned int base) { intermediate->setShiftTextureBinding(base); }
-void TShader::setShiftUboBinding(unsigned int base)     { intermediate->setShiftUboBinding(base); }
-void TShader::setAutoMapBindings(bool map)              { intermediate->setAutoMapBindings(map); }
 void TShader::setFlattenUniformArrays(bool flatten)     { intermediate->setFlattenUniformArrays(flatten); }
 
 //
@@ -1715,7 +1711,7 @@ void TProgram::dumpReflection()                      { reflection->dump(); }
 //
 // I/O mapping implementation.
 //
-bool TProgram::mapIO()
+bool TProgram::mapIO(TIoMapResolver* resolver)
 {
     if (! linked || ioMapper)
         return false;
@@ -1724,7 +1720,7 @@ bool TProgram::mapIO()
 
     for (int s = 0; s < EShLangCount; ++s) {
         if (intermediate[s]) {
-            if (! ioMapper->addStage((EShLanguage)s, *intermediate[s], *infoSink))
+            if (! ioMapper->addStage((EShLanguage)s, *intermediate[s], *infoSink, resolver))
                 return false;
         }
     }

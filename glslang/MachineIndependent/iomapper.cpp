@@ -61,177 +61,185 @@
 //    c. implicit dead bindings are left un-bound.
 //
 
-   
+
 namespace glslang {
+
+struct TVarEntryInfo
+{
+    int             id;
+    TIntermSymbol*  symbol;
+    bool            live;
+    int             newBinding;
+    int             newSet;
+
+    friend inline bool operator==(const TVarEntryInfo& l, const TVarEntryInfo& r)
+    {
+        return l.id == r.id;
+    }
+
+    friend inline bool operator<(const TVarEntryInfo& l, const TVarEntryInfo& r)
+    {
+        return l.id < r.id;
+    }
+
+    struct TOrderByPriority
+    {
+        // ordering:
+        // 1) has both binding and set
+        // 2) has binding but no set
+        // 3) has no binding but set
+        // 4) has no binding and no set
+        inline bool operator()(const TVarEntryInfo& l, const TVarEntryInfo& r)
+        {
+            const TQualifier& lq = l.symbol->getQualifier();
+            const TQualifier& rq = r.symbol->getQualifier();
+
+            if (lq.hasBinding())
+            {
+                if (rq.hasBinding())
+                {
+                    if (lq.hasSet())
+                    {
+                        if (!rq.hasSet())
+                            return true;
+                    }
+                    else if (rq.hasSet())
+                    {
+                        return false;
+                    }
+                }
+                else
+                {
+                    return true;
+                }
+            }
+            else if (rq.hasBinding())
+            {
+                return false;
+            }
+            else
+            {
+                if (lq.hasSet())
+                {
+                    if(!rq.hasSet())
+                        return true;
+                }
+                else if (rq.hasSet())
+                {
+                    return false;
+                }
+            }
+
+            return l.id < r.id;
+        }
+    };
+};
+
+
+
+typedef std::vector<TVarEntryInfo> TVarLiveMap;
 
 // Map of IDs to bindings
 typedef std::unordered_map<unsigned int, int> TBindingMap;
 typedef std::unordered_set<int> TUsedBindings;
 
-
-// This traverses the AST to determine which bindings are used, and which are implicit
-// (for subsequent auto-numbering)
-class TBindingTraverser : public TLiveTraverser {
+class TVarGatherTraverser : public TLiveTraverser
+{
 public:
-    TBindingTraverser(const TIntermediate& i, TBindingMap& bindingMap, TUsedBindings& usedBindings,
-                      bool traverseDeadCode = false) :
-        TLiveTraverser(i, traverseDeadCode, true, true, false),
-        bindingMap(bindingMap),
-        usedBindings(usedBindings)
-    { }
-
-protected:
-    virtual void visitSymbol(TIntermSymbol* base) {
-        if (base->getQualifier().storage == EvqUniform)
-            addUniform(*base);
-    }
-
-    // Return the right binding base given the variable type.
-    int getBindingBase(const TType& type) {
-        if (type.getBasicType() == EbtSampler) {
-            const TSampler& sampler = type.getSampler();
-            if (sampler.isPureSampler())
-                return intermediate.getShiftSamplerBinding();
-            if (sampler.isTexture())
-                return intermediate.getShiftTextureBinding();
-        }
-
-        if (type.getQualifier().isUniformOrBuffer())
-            return intermediate.getShiftUboBinding();
-
-        return -1;  // not a type with a binding
-    }
-
-    // Mark a given base symbol ID as being bound to 'binding'
-    void markBinding(const TIntermSymbol& base, int binding) {
-        bindingMap[base.getId()] = binding;
-
-        if (binding >= 0) {
-            // const TType& type = base.getType();
-            const unsigned int size = 1; // type.isArray() ? type.getCumulativeArraySize() : 1;
-
-            for (unsigned int offset=0; offset<size; ++offset)
-                usedBindings.insert(binding + offset);
-        }
-    }
-
-    // Mark the bindings that are given explicitly, and set ones that need
-    // implicit bindings to -1 for a subsequent pass.  (Can't happen in this
-    // pass because explicit bindings in dead code reserve the location).
-    virtual void addUniform(TIntermSymbol& base)
+    TVarGatherTraverser(const TIntermediate& i, TVarLiveMap& vars, bool traverseDeadCode)
+      : TLiveTraverser(i, traverseDeadCode, true, true, false)
+      , varLiveList(vars)
     {
-        // Skip ones we've already seen.
-        if (bindingMap.find(base.getId()) != bindingMap.end())
-            return;
+    }
 
-        const TType& type = base.getType();
-        const int bindingBase = getBindingBase(type);
 
-        // Return if it's not a type we bind
-        if (bindingBase == -1)
-            return;
-
-        if (type.getQualifier().hasBinding()) {
-            // It has a binding: keep that one.
-            markBinding(base, type.getQualifier().layoutBinding + bindingBase);
-        } else if (!traverseAll) {
-            // Mark it as something we need to dynamically create a binding for,
-            // only if we're walking just the live code.  We don't auto-number
-            // in dead code.
-            markBinding(base, -1);
+    virtual void visitSymbol(TIntermSymbol* base)
+    {
+        if (base->getQualifier().storage == EvqUniform)
+        {
+            TVarEntryInfo ent = { base->getId(), base, !traverseAll };
+            TVarLiveMap::iterator at = std::lower_bound(varLiveList.begin(), varLiveList.end(), ent);
+            if (at != varLiveList.end() && *at == ent)
+            {
+              // may need to update from !live to live
+              at->live = !traverseAll;
+              return;
+            }
+            varLiveList.insert(at, ent);
         }
     }
 
-    TBindingMap&         bindingMap;
-    TUsedBindings&       usedBindings;
+  private:
+    TVarLiveMap&    varLiveList;
 };
 
-
-// This traverses the AST and applies binding maps it's given.
-class TIoMappingTraverser : public TBindingTraverser {
+class TVarSetTraverser : public TLiveTraverser
+{
 public:
-    TIoMappingTraverser(TIntermediate& i, TBindingMap& bindingMap, TUsedBindings& usedBindings,
-                        TInfoSink& infoSink, bool traverseDeadCode) :
-        TBindingTraverser(i, bindingMap, usedBindings, traverseDeadCode),
-        infoSink(infoSink),
-        assignError(false)
-    { }
-
-    bool success() const { return !assignError; }
-
-protected:
-    unsigned checkBindingRange(const TIntermSymbol& base, unsigned binding)
+    TVarSetTraverser(const TIntermediate& i, const TVarLiveMap& vars)
+      : TLiveTraverser(i, true, true, true, false)
+      , varLiveList(vars)
     {
-        if (binding >= TQualifier::layoutBindingEnd) {
-            TString err = "mapped binding out of range: ";
-            err += base.getName();
-
-            infoSink.info.message(EPrefixInternalError, err.c_str());
-            assignError = true;
-            
-            return 0;
-        }
-
-        return binding;
     }
 
-    void addUniform(TIntermSymbol& base) override
+
+    virtual void visitSymbol(TIntermSymbol* base)
     {
-        // Skip things we don't intend to bind.
-        if (bindingMap.find(base.getId()) == bindingMap.end())
+        TVarLiveMap::value_type ent = { base->getId() };
+        TVarLiveMap::const_iterator at = std::find(varLiveList.begin(), varLiveList.end(), ent);
+        if (at == varLiveList.end())
+            return;
+        if (!(*at == ent))
             return;
 
-        const int existingBinding = bindingMap[base.getId()];
-
-        // Apply existing binding, if we were given one or already made one up.
-        if (existingBinding != -1) {
-            base.getWritableType().getQualifier().layoutBinding = checkBindingRange(base, existingBinding);
-            return;
-        }
-
-        if (intermediate.getAutoMapBindings()) {
-            // Otherwise, find a free spot for it.
-            const int freeBinding = getFreeBinding(base.getType(), getBindingBase(base.getType()));
-
-            markBinding(base, freeBinding);
-            base.getWritableType().getQualifier().layoutBinding = checkBindingRange(base, freeBinding);
-        }
+        if (at->newBinding != -1)
+            base->getWritableType().getQualifier().layoutBinding = at->newBinding;
+        if (at->newSet != -1)
+            base->getWritableType().getQualifier().layoutSet = at->newSet;
     }
 
-    // Search for N free consecutive binding slots in [base, base+required).
-    // E.g, if we want to reserve consecutive bindings for flattened arrays.
-    bool hasNFreeSlots(int base, int required) {
-        for (int binding = base; binding < (base + required); ++binding)
-            if (usedBindings.find(binding) != usedBindings.end())
-                return false;
-        
-        return true;
+  private:
+    const TVarLiveMap&    varLiveList;
+};
+
+struct TResolverAdaptor
+{
+  TResolverAdaptor(EShLanguage s, TIoMapResolver& r, TInfoSink& i)
+    : resolver(r)
+    , stage(s)
+    , infoSink(i)
+    , error(false)
+  {
+  }
+  inline void operator()(TVarEntryInfo& ent)
+  {
+    bool isValid = resolver.validateBinding(stage, ent.symbol->getName().c_str(), ent.symbol->getType(), ent.live);
+    if (isValid)
+    {
+      ent.newBinding = resolver.resolveBinding(stage, ent.symbol->getName().c_str(), ent.symbol->getType(), ent.live);
+      ent.newSet = resolver.resolveSet(stage, ent.symbol->getName().c_str(), ent.symbol->getType(), ent.live);
     }
-
-    // Find a free binding spot 
-    int getFreeBinding(const TType&, int nextBinding) {
-        while (!hasNFreeSlots(nextBinding, 1))
-            ++nextBinding;
-
-        return nextBinding;
+    else
+    {
+      TString errorMsg = "Invalid binding: " + ent.symbol->getName();
+      infoSink.info.message(EPrefixInternalError, errorMsg.c_str());
+      error = true;
     }
-
-private:
-    bool assignError;  // true if there was an error assigning the bindings
-    TInfoSink& infoSink;
+  }
+  EShLanguage     stage;
+  TIoMapResolver& resolver;
+  TInfoSink&      infoSink;
+  bool            error;
 };
 
 // Map I/O variables to provided offsets, and make bindings for
 // unbound but live variables.
 //
 // Returns false if the input is too malformed to do this.
-bool TIoMapper::addStage(EShLanguage, TIntermediate& intermediate, TInfoSink& infoSink)
+bool TIoMapper::addStage(EShLanguage stage, TIntermediate &intermediate, TInfoSink &infoSink, TIoMapResolver *resolver)
 {
     // Trivial return if there is nothing to do.
-    if (intermediate.getShiftSamplerBinding() == 0 &&
-        intermediate.getShiftTextureBinding() == 0 &&
-        intermediate.getShiftUboBinding() == 0 &&
-        intermediate.getAutoMapBindings() == false)
+    if (resolver == NULL)
         return true;
 
     if (intermediate.getNumEntryPoints() != 1 || intermediate.isRecursive())
@@ -241,30 +249,30 @@ bool TIoMapper::addStage(EShLanguage, TIntermediate& intermediate, TInfoSink& in
     if (root == nullptr)
         return false;
 
-    // The lifetime of this data spans several passes.
-    TBindingMap   bindingMap;
-    TUsedBindings usedBindings;
+    TVarLiveMap varMap;
+    TVarGatherTraverser iter_binding_all(intermediate, varMap, true);
+    TVarGatherTraverser iter_binding_live(intermediate, varMap, false);
 
-    TBindingTraverser it_binding_all(intermediate, bindingMap, usedBindings, true);
-    TBindingTraverser it_binding_live(intermediate, bindingMap, usedBindings, false);
-    TIoMappingTraverser it_iomap(intermediate, bindingMap, usedBindings, infoSink, true);
+    root->traverse(&iter_binding_all);
+    iter_binding_live.pushFunction(intermediate.getEntryPointMangledName().c_str());
 
-    // Traverse all (live+dead) code to find explicit bindings, so we can avoid those.
-    root->traverse(&it_binding_all);
-
-    // Traverse just live code to find things that need implicit bindings.
-    it_binding_live.pushFunction(intermediate.getEntryPointMangledName().c_str());
-
-    while (! it_binding_live.functions.empty()) {
-        TIntermNode* function = it_binding_live.functions.back();
-        it_binding_live.functions.pop_back();
-        function->traverse(&it_binding_live);
+    while (!iter_binding_live.functions.empty())
+    {
+        TIntermNode* function = iter_binding_live.functions.back();
+        iter_binding_live.functions.pop_back();
+        function->traverse(&iter_binding_live);
     }
-
-    // Bind everything that needs a binding and doesn't have one.
-    root->traverse(&it_iomap);
-
-    return it_iomap.success();
+    std::sort(varMap.begin(), varMap.end(), TVarEntryInfo::TOrderByPriority());
+    TResolverAdaptor doResolve(stage, *resolver, infoSink);
+    std::for_each(varMap.begin(), varMap.end(), doResolve);
+    if (!doResolve.error)
+    {
+      // sort by id again
+      std::sort(varMap.begin(), varMap.end());
+      TVarSetTraverser iter_iomap(intermediate, varMap);
+      root->traverse(&iter_iomap);
+    }
+    return !doResolve.error;
 }
 
 } // end namespace glslang

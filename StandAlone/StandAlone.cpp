@@ -283,7 +283,7 @@ void ProcessArguments(int argc, char* argv[])
                                lowerword == "sub") {
                         ProcessBindingBase(argc, argv, baseUboBinding);
                     } else if (lowerword == "auto-map-bindings" ||  // synonyms
-                               lowerword == "auto-map-binding"  || 
+                               lowerword == "auto-map-binding"  ||
                                lowerword == "amb") {
                         Options |= EOptionAutoMapBindings;
                     } else if (lowerword == "flatten-uniform-arrays" || // synonyms
@@ -510,6 +510,121 @@ struct ShaderCompUnit {
 
 };
 
+/*
+ * Basic implementation of glslang::TIoMapResolver that replaces the
+ * previous offset behavior.
+ * It does the same, uses the offsets for th corresponding uniform
+ * types. Also honors the EOptionAutoMapBindings flag and binds
+ * them if requested.
+ */
+struct TDefaultIoResolver : public glslang::TIoMapResolver
+{
+  typedef std::vector<int> TSlotSet;
+  typedef std::unordered_map<int, TSlotSet> TSlotSetMap;
+  TSlotSetMap slots;
+  TSlotSet::iterator findSlot(int set, int slot)
+  {
+    return std::lower_bound(slots[set].begin(), slots[set].end(), slot);
+  }
+  bool checkEmpty(int set, int slot)
+  {
+    TSlotSet::iterator at = findSlot(set, slot);
+    return !(at != slots[set].end() && *at == slot);
+  }
+  int reserveSlot(int set, int slot)
+  {
+    TSlotSet::iterator at = findSlot(set, slot);
+    slots[set].insert(at, slot);
+    return slot;
+  }
+  int getFreeSlot(int set, int base)
+  {
+    TSlotSet::iterator at = findSlot(set, base);
+    if (at == slots[set].end())
+      return reserveSlot(set, base);
+
+    // look in lockstep, if they not macht, then there is a free slot
+    for (; at != slots[set].end(); ++at, ++base)
+      if (*at != base)
+        break;
+    return reserveSlot(set, base);
+  }
+  bool validateBinding(EShLanguage stage, const char* /*name*/, const glslang::TType& type, bool /*is_live*/) override
+  {
+    if (type.getQualifier().hasBinding())
+    {
+      int set;
+      if (type.getQualifier().hasSet())
+        set = type.getQualifier().layoutSet;
+      else
+        set = 0;
+
+      if (type.getBasicType() == glslang::EbtSampler)
+      {
+        const glslang::TSampler& sampler = type.getSampler();
+        if (sampler.isPureSampler())
+          return checkEmpty(set, baseSamplerBinding[stage] + type.getQualifier().layoutBinding);
+
+        if (sampler.isTexture())
+          return checkEmpty(set, baseTextureBinding[stage] + type.getQualifier().layoutBinding);
+      }
+
+      if (type.getQualifier().isUniformOrBuffer())
+        return checkEmpty(set, baseUboBinding[stage] + type.getQualifier().layoutBinding);
+    }
+    return true;
+  }
+  int resolveBinding(EShLanguage stage, const char* /*name*/, const glslang::TType& type, bool is_live) override
+  {
+    int set;
+    if (type.getQualifier().hasSet())
+      set = type.getQualifier().layoutSet;
+    else
+      set = 0;
+
+    if (type.getQualifier().hasBinding())
+    {
+      if (type.getBasicType() == glslang::EbtSampler)
+      {
+        const glslang::TSampler& sampler = type.getSampler();
+        if (sampler.isPureSampler())
+          return reserveSlot(set, baseSamplerBinding[stage] + type.getQualifier().layoutBinding);
+
+        if (sampler.isTexture())
+          return reserveSlot(set, baseTextureBinding[stage] + type.getQualifier().layoutBinding);
+      }
+
+      if (type.getQualifier().isUniformOrBuffer())
+        return reserveSlot(set, baseUboBinding[stage] + type.getQualifier().layoutBinding);
+    }
+    else if(is_live && (Options & EOptionAutoMapBindings))
+    {
+      // find free slot, the caller did make sure it passes all vars with binding
+      // first and now all are passed that do not have a binding and needs one
+      if (type.getBasicType() == glslang::EbtSampler)
+      {
+        const glslang::TSampler& sampler = type.getSampler();
+        if (sampler.isPureSampler())
+          return getFreeSlot(set, baseSamplerBinding[stage]);
+
+        if (sampler.isTexture())
+          return getFreeSlot(set, baseTextureBinding[stage]);
+      }
+
+      if (type.getQualifier().isUniformOrBuffer())
+        return getFreeSlot(set, baseUboBinding[stage]);
+    }
+
+    return -1;
+  }
+  int resolveSet(EShLanguage /*stage*/, const char* /*name*/, const glslang::TType& type, bool /*is_live*/) override
+  {
+    if (type.getQualifier().hasSet())
+      return type.getQualifier().layoutSet;
+    return 0;
+  }
+};
+
 //
 // For linking mode: Will independently parse each compilation unit, but then put them
 // in the same program and link them together, making at most one linked module per
@@ -538,14 +653,8 @@ void CompileAndLinkShaderUnits(std::vector<ShaderCompUnit> compUnits)
         if (entryPointName) // HLSL todo: this needs to be tracked per compUnits
             shader->setEntryPoint(entryPointName);
 
-        shader->setShiftSamplerBinding(baseSamplerBinding[compUnit.stage]);
-        shader->setShiftTextureBinding(baseTextureBinding[compUnit.stage]);
-        shader->setShiftUboBinding(baseUboBinding[compUnit.stage]);
         shader->setFlattenUniformArrays((Options & EOptionFlattenUniformArrays) != 0);
 
-        if (Options & EOptionAutoMapBindings)
-            shader->setAutoMapBindings(true);
-                
         shaders.push_back(shader);
 
         const int defaultVersion = Options & EOptionDefaultDesktop? 110: 100;
@@ -586,10 +695,11 @@ void CompileAndLinkShaderUnits(std::vector<ShaderCompUnit> compUnits)
 
     // Map IO
     if (Options & EOptionSpv) {
-        if (!program.mapIO())
+        TDefaultIoResolver ioResolve;
+        if (!program.mapIO(&ioResolve))
             LinkFailed = true;
     }
-    
+
     // Report
     if (! (Options & EOptionSuppressInfolog) &&
         ! (Options & EOptionMemoryLeakMode)) {
