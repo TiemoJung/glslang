@@ -61,6 +61,9 @@ using HlslCompileTest = GlslangTest<::testing::TestWithParam<FileNameEntryPointP
 using HlslVulkan1_1CompileTest = GlslangTest<::testing::TestWithParam<FileNameEntryPointPair>>;
 using HlslCompileAndFlattenTest = GlslangTest<::testing::TestWithParam<FileNameEntryPointPair>>;
 using HlslLegalizeTest = GlslangTest<::testing::TestWithParam<FileNameEntryPointPair>>;
+using HlslAtomicCounterTestSeparateBuffer = GlslangTest<::testing::TestWithParam<FileNameEntryPointPair>>;
+using HlslAtomicCounterTestSeparateAtomic = GlslangTest<::testing::TestWithParam<FileNameEntryPointPair>>;
+using HlslAtomicCounterTestEmbeded = GlslangTest<::testing::TestWithParam<FileNameEntryPointPair>>;
 
 // Compiling HLSL to pre-legalized SPIR-V under Vulkan semantics. Expected
 // to successfully generate both AST and SPIR-V.
