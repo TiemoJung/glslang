@@ -7373,7 +7373,8 @@ const TFunction* HlslParseContext::findFunction(const TSourceLoc& loc, TFunction
         if ((from.isScalarOrVec1() && to.isScalarOrVec1()) ||
             (from.isScalarOrVec1() && to.isVector())    ||
             (from.isScalarOrVec1() && to.isMatrix())    ||
-            (from.isVector() && to.isVector() && from.getVectorSize() >= to.getVectorSize()))
+            (from.isVector() && to.isVector() && from.getVectorSize() >= to.getVectorSize()) ||
+            (from.isVector() && to.isScalarOrVec1()))
             return true;
 
         // TODO: what are the matrix rules? they go here
@@ -10074,6 +10075,8 @@ struct DiscoverStructuredBufferWithCounters : public TIntermTraverser {
         case EOpIndexIndirect:
         case EOpIndexDirectStruct:
             onIndexing(bin);
+            break;
+        default:
             break;
         }
         return true;
